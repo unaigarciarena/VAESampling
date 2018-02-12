@@ -46,7 +46,7 @@ def batch(x, size, i):
 
 n_samples = 1000
 X_dim = 784
-Function = "F1"
+Function = "F8"
 MOP_f = F_Functions(X_dim, Function)
 ps_all_x = MOP_f.Generate_PS_samples(n_samples)
 pf1, pf2 = MOP_f.Evaluate_MOP_Function(ps_all_x)
@@ -107,7 +107,7 @@ class VAE(object):
         self.batch_size = batch_size
 
         # tf Graph input
-        self.x = tf.placeholder(tf.float32, [None, network_architecture["n_input"]])
+        self.x = tf.placeholder(tf.float32, [None, network_architecture.X_dim])
 
         # Create autoencoder network
         self._create_network()
@@ -142,12 +142,13 @@ class VAE(object):
         # maps inputs onto a normal distribution in latent space.
         # The transformation is parametrized and can be learned.
 
-        w_mean = tf.Variable(xavier_init(self.network_architecture["n_hidden_recog_2"], self.network_architecture["n_z"]))
-        w_log_sigma = tf.Variable(xavier_init(self.network_architecture["n_hidden_recog_2"], self.network_architecture["n_z"]))
-        b_mean = tf.Variable(tf.zeros([self.network_architecture["n_z"]], dtype=tf.float32)),
-        b_log_sigma = tf.Variable(tf.zeros([self.network_architecture["n_z"]], dtype=tf.float32))
+        recog_descriptor = self.network_architecture.Enc_network
 
-        recog_descriptor = NetworkDescriptor(1, self.network_architecture["n_input"], self.network_architecture["n_hidden_recog_2"], [self.network_architecture["n_hidden_recog_1"]], [xavier_init, xavier_init], [tf.nn.softplus, tf.nn.softplus], None)
+        w_mean = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
+        w_log_sigma = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
+        b_mean = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32)),
+        b_log_sigma = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32))
+
         self.recog_network = Network(recog_descriptor)
         self.recog_network.network_initialization()
         layer_2 = self.recog_network.network_evaluation(self.x)
@@ -159,10 +160,10 @@ class VAE(object):
         # Generate probabilistic decoder (decoder network), which
         # maps points in latent space onto a Bernoulli distribution in data space.
         # The transformation is parametrized and can be learned.
-        gen_descriptor = NetworkDescriptor(2, self.network_architecture["n_z"], 784, [self.network_architecture["n_hidden_gener_1"], self.network_architecture["n_hidden_gener_2"]], [xavier_init, xavier_init, xavier_init], [tf.nn.softplus, tf.nn.softplus, None], None)
+        gen_descriptor = self.network_architecture.Dec_network
         self.gen_network = Network(gen_descriptor)
         self.gen_network.network_initialization()
-        self.layer_21 = tf.nn.sigmoid(self.gen_network.network_evaluation(self.z))
+        self.layer_21 = self.gen_network.network_evaluation(self.z)
         return self.layer_21
 
     def _create_loss_optimizer(self):
@@ -211,7 +212,7 @@ class VAE(object):
         space.
         """
 
-        z_mu = np.random.normal(size=(samples, self.network_architecture["n_z"]))
+        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
         # Note: This maps to mean of distribution, we could alternatively
         # sample from Gaussian distribution
         return self.sess.run(self.x_reconstr_mean, feed_dict={self.z: np.reshape(z_mu, (samples, -1))})
@@ -231,11 +232,11 @@ class VAE(object):
 def train(network_architecture, learning_rate=0.001,
           batch_size=100, training_epochs=10, display_step=5):
 
-    vae_desc = VAEESDescriptor(784, 30, 2, [np.random.normal], ["VAE_MSE_Div"])
+    vae_desc = VAEESDescriptor(784, 500, 2, [np.random.normal], ["VAE_MSE_Div"])
+    vae_desc.vae_decoder_initialization(2, [500, 500], [xavier_init, xavier_init, xavier_init], [tf.nn.softplus, tf.nn.softplus, tf.nn.sigmoid], None)
+    vae_desc.vae_encoder_initialization(1, [500], [xavier_init, xavier_init], [tf.nn.softplus, tf.nn.softplus], None)
 
-    vae = VAE(network_architecture,
-                                 learning_rate=learning_rate,
-                                 batch_size=batch_size)
+    vae = VAE(vae_desc, learning_rate=learning_rate, batch_size=batch_size)
     # Training cycle
     batch_i = 0
     for epoch in range(training_epochs):
@@ -269,7 +270,7 @@ network_architecture = dict(n_hidden_recog_1=500,  # 1st layer encoder neurons
                             n_input=784,  # MNIST data input (img shape: 28*28)
                             n_z=20)  # dimensionality of latent space
 
-vae = train(network_architecture, training_epochs=75)
+vae = train(network_architecture, training_epochs=300)
 
 
 # Based on this we can sample some test inputs and visualize how well the VAE can reconstruct those. In general the VAE does really well.

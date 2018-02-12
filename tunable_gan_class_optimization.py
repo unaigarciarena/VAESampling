@@ -544,7 +544,7 @@ class VAEESDescriptor:
     def vae_decoder_initialization(self, decoder_n_hidden, decoder_dim_list, decoder_init_functions,
                                    decoder_act_functions, decoder_number_loop_train=1):
         output_dim = self.X_dim
-        input_dim = self.z_dim + self.objectives
+        input_dim = self.z_dim
 
         self.Dec_network = NetworkDescriptor(decoder_n_hidden, input_dim, output_dim, decoder_dim_list, decoder_init_functions,
                                              decoder_act_functions, decoder_number_loop_train)

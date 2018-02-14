@@ -24,6 +24,7 @@ from tunable_gan_class_optimization import Network, VAEESDescriptor
 import argparse
 
 
+
 def batch(x, y, size, i):
     """
     :param x: Poplation; set of solutions intended to be fed to the net in the input

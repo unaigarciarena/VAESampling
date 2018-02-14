@@ -103,13 +103,19 @@ class F_Functions:
         J2 = np.arange(2,self.n+1,2)
         val = np.zeros((N))
         for j in J1:
-            eval = 0.5*(1.0+(3*(j-2)/(self.n-2)))      
-            val = val +  (x[:,j-1]- x[:,0]**eval)**2
+            eval = 0.5*(1.0+(3*(j-2)/(self.n-2)))
+            try:
+                aux = (x[:,j-1] - x[:,0]**eval)
+            except:
+                print(eval)
+                print(x[:,0])
+            val = val + aux**2
         f1 = x[:,0] + (2.0/J1.shape[0])*val
         val = np.zeros((N))
         for j in J2:
-            eval = 0.5*(1.0+(3*(j-2)/(self.n-2)))      
-            val = val +  (x[:,j-1]- x[:,0]**eval)**2        
+            eval = 0.5*(1.0+(3*(j-2)/(self.n-2)))
+            aux = x[:,j-1] - x[:,0]**eval
+            val = val + aux**2
         f2 = 1 - np.sqrt(x[:,0]) + (2.0/J2.shape[0])*val
         return f1,f2
 

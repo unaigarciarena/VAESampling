@@ -224,7 +224,12 @@ class Network:
 
     @staticmethod
     def create_hidden_layer(in_size, out_size, init_w_function, layer_name):
-        w = tf.Variable(init_w_function(shape=[in_size, out_size]), name="W"+layer_name)
+        if "uniform" in init_w_function.__name__:
+            w = tf.Variable(init_w_function(shape=[in_size, out_size], minval=-0.1, maxval=0.1), name="W"+layer_name)
+        elif "normal" in init_w_function.__name__:
+            w = tf.Variable(init_w_function(shape=[in_size, out_size], mean=0, stddev=0.03), name="W"+layer_name)
+        else:
+            w = tf.Variable(init_w_function(shape=[in_size, out_size]), name="W"+layer_name)
         b = tf.Variable(tf.zeros(shape=[out_size]), name="b"+layer_name)
         return w, b
     
@@ -544,7 +549,7 @@ class VAEESDescriptor:
     def vae_decoder_initialization(self, decoder_n_hidden, decoder_dim_list, decoder_init_functions,
                                    decoder_act_functions, decoder_number_loop_train=1):
         output_dim = self.X_dim
-        input_dim = self.z_dim
+        input_dim = self.z_dim + self.objectives
 
         self.Dec_network = NetworkDescriptor(decoder_n_hidden, input_dim, output_dim, decoder_dim_list, decoder_init_functions,
                                              decoder_act_functions, decoder_number_loop_train)
@@ -552,7 +557,7 @@ class VAEESDescriptor:
     def vae_approximator_initialization(self, approximator_n_hidden, approximator_dim_list, approximator_init_functions,
                                         approximator_act_functions, approximator_number_loop_train=1):
 
-        input_dim = self.z_dim
+        input_dim = self.z_dim + self.objectives
         output_dim = self.objectives
         self.App_network = NetworkDescriptor(approximator_n_hidden, input_dim, output_dim, approximator_dim_list,
                                              approximator_init_functions, approximator_act_functions, approximator_number_loop_train)

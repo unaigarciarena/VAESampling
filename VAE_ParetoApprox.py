@@ -22,7 +22,7 @@ import tensorflow as tf
 from Class_F_Functions import F_Functions, scale_columns, igd
 from tunable_gan_class_optimization import Network, VAEESDescriptor
 import argparse
-
+import time
 
 
 def batch(x, y, size, i):
@@ -199,11 +199,11 @@ class VAE(object):
                              feed_dict={self.x: x})
 
 
-def train(batch_size=100, training_epochs=10, display_step=299):
+def train(batch_size=100, epochs=10, display_step=299):
 
     # Training cycle
     batch_i = 0
-    for epoch in range(training_epochs):
+    for epoch in range(epochs):
         avg_cost = 0.
         total_batch = int(n_samples / batch_size)
         # Loop over all batches
@@ -221,6 +221,7 @@ def train(batch_size=100, training_epochs=10, display_step=299):
                   "cost=", "{:.9f}".format(avg_cost))
     return vae
 
+
 class VAE_E(VAE):
 
     def __init__(self, network_architecture, objectives):
@@ -230,7 +231,6 @@ class VAE_E(VAE):
         self.obj = tf.placeholder(tf.float32, shape=[None, self.objectives.shape[1]])
 
         super().__init__(network_architecture)
-
 
     def _approximation_network(self):
         # Generate probabilistic decoder (decoder network), which
@@ -247,7 +247,6 @@ class VAE_E(VAE):
 
         super()._create_network()
         self.approximation = self._approximation_network()
-
 
     def _create_loss_optimizer(self):
 
@@ -277,6 +276,7 @@ class VAE_E(VAE):
         _, cost = self.sess.run((self.optimizer, self.cost), feed_dict={self.x: x, self.obj: obj})
 
         return cost
+
 
 class VAE_E_E(VAE_E):
 
@@ -317,6 +317,7 @@ class VAE_E_E(VAE_E):
         # sample from Gaussian distribution
 
         return self.sess.run(self.x_reconstr_mean, feed_dict={self.z: np.reshape(z_mu, (samples, -1)), self.obj: objs[np.random.randint(objs.shape[0], size=objs.shape[0]), :]})
+
 
 def create_descriptor():
 
@@ -386,14 +387,14 @@ if __name__ == "__main__":
     parser.add_argument(
         '--sum', dest='accumulate', action='store_const', const=sum, default=max, help='sum the integers (default: find the max)')
     args = parser.parse_args()
-    myseed = args.integers[0]               # Seed: Used to set different outcomes of the stochastic program
-    n_samples = args.integers[1]       # Number samples to generate by encoder  (number_samples=1000)
-    X_dim = args.integers[2]                  # Number of Variables of the MO function (n=10)
+    myseed = args.integers[0] - 1         # Seed: Used to set different outcomes of the stochastic program
+    n_samples = args.integers[1]          # Number samples to generate by encoder  (number_samples=1000)
+    X_dim = args.integers[2]              # Number of Variables of the MO function (n=10)
     Function = "F"+str(args.integers[3])  # MO function to optimize, all in F1...F9, except F6
-    z_dim = args.integers[4]               # Dimension of the latent variable  (z_dim=30)
-    n_layers = args.integers[5]              # Maximum number of layers for generator and discriminator (n_layers = 10)
-    max_layer_size = args.integers[6]       # Maximum size of the layers  (max_layer_size = 50)
-
+    z_dim = args.integers[4]              # Dimension of the latent variable  (z_dim=30)
+    n_layers = args.integers[5]           # Maximum number of layers for generator and discriminator (n_layers = 10)
+    max_layer_size = args.integers[6]     # Maximum size of the layers  (max_layer_size = 50)
+    training_epochs = args.integers[7]    # Training iterations for each VAE instance (training_epochs = 300)
     divergence_measures = ["VAE_MSE_Div", "VAE_Log_Prob"]
     init_functions = [tf.random_uniform, tf.random_normal, xavier_init]
     act_functions = [tf.nn.relu, tf.nn.elu, tf.nn.softplus, tf.nn.softsign, tf.sigmoid, tf.nn.tanh, None]
@@ -408,56 +409,51 @@ if __name__ == "__main__":
     objs = np.transpose(objs)
     ps_all_x = scale_columns(ps_all_x)
 
-    myseed = 0
     vae_cod = []
     vae_e_cod = []
-    while myseed < 51:
+    vae_ee_cod = []
+    while myseed < 550:
         print("Seed: " + str(myseed))
         np.random.seed(myseed)
         tf.set_random_seed(myseed)
         tf.reset_default_graph()
 
         vae_desc = create_descriptor()
-        #print(vae_desc.App_network.input_dim)
+        start = time.time()
         vae = VAE_E_E(vae_desc, objs)
 
-        vae = train(training_epochs=300)
+        vae = train(epochs=training_epochs)
 
-        _, x_sample, y_sample = batch(ps_all_x, objs, 50, 0)
         aux = vae.generate(1000, objs)
         igd_val = plot(aux)
-        vae_e_cod += [[myseed] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
+        vae_ee_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
 
-        print("VAE_E_E IGD: " + str(igd_val))
+        print("VAE_EE IGD: " + str(igd_val))
 
         vae_desc.Dec_network.input_dim = z_dim
         vae_desc.App_network.input_dim = z_dim
 
-
+        start = time.time()
         vae = VAE_E(vae_desc, objs)
-        vae = train(training_epochs=300)
+        vae = train(epochs=training_epochs)
 
-        _, x_sample, y_sample = batch(ps_all_x, objs, 50, 0)
         aux = vae.generate(1000, None)
         igd_val = plot(aux)
-        vae_e_cod += [[myseed] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
+        vae_e_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
 
         print("VAE_E IGD: " + str(igd_val))
 
-
-
-
-        #print(np.concatenate((vae.predict_from_x(x_sample), y_sample), axis=1))
-        vae = VAE(vae_desc, learning_rate=0.001)
-        vae = train(training_epochs=300)
+        start = time.time()
+        vae = VAE(vae_desc)
+        vae = train(epochs=training_epochs)
         _, x_sample, y_sample = batch(ps_all_x, objs, 50, 0)
 
         aux = vae.generate(1000, None)
         igd_val = plot(aux)
-        vae_cod += [[myseed] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
+        vae_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
         print("VAE IGD: " + str(igd_val))
         myseed += 50
 
-
-    np.savetxt("VAE_E" + str(myseed) + ".csv", vae_e_cod)
-    np.savetxt("VAE" + str(myseed) + ".csv", vae_cod)
+    np.savetxt("results/VAE_E_F" + Function + "seed" + str(myseed) + ".csv", vae_e_cod)
+    np.savetxt("results/VAE_EE_F" + Function + "seed" + + str(myseed) + ".csv", vae_ee_cod)
+    np.savetxt("results/VAE_F" + Function + "seed" + + str(myseed) + ".csv", vae_cod)

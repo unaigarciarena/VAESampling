@@ -20,7 +20,7 @@ import numpy as np
 import tensorflow as tf
 
 from Class_F_Functions import F_Functions, scale_columns, igd
-from tunable_gan_class_optimization import Network, VAEESDescriptor
+from tunable_gan_class_optimization import VAEESDescriptor, VAE, VAEE, VAEEE
 import argparse
 import time
 
@@ -72,251 +72,6 @@ def xavier_init(fan_in=None, fan_out=None, shape=None, constant=1):
     return tf.random_uniform((fan_in, fan_out),
                              minval=low, maxval=high,
                              dtype=tf.float32)
-
-
-class VAE(object):
-    """ Variation Autoencoder (VAE) with an sklearn-like interface implemented using TensorFlow.
-
-    This implementation uses probabilistic encoders and decoders using Gaussian
-    distributions and  realized by multi-layer perceptrons. The VAE can be learned
-    end-to-end.
-
-    See "Auto-Encoding Variational Bayes" by Kingma and Welling for more details.
-    """
-    def __init__(self, network_architecture, learning_rate=0.001, batch_size=100):
-        self.network_architecture = network_architecture
-        self.learning_rate = learning_rate
-        self.batch_size = batch_size
-        self.Div_Function = self.Divergence_Functions[self.network_architecture.fmeasure]
-        # tf Graph input
-        self.x = tf.placeholder(tf.float32, [None, network_architecture.X_dim])
-        self.reconstr_loss = None
-        # Create autoencoder network
-        self._create_network()
-        # Define loss function based variational upper-bound and
-        # corresponding optimizer
-        self._create_loss_optimizer()
-
-        # Initializing the tensor flow variables
-        init = tf.global_variables_initializer()
-
-        # Launch the session
-        self.sess = tf.InteractiveSession()
-        self.sess.run(init)
-
-    def _create_network(self):
-        # Use recognition network to determine mean and
-        # (log) variance of Gaussian distribution in latent
-        # space
-        self.z_mean, self.z_log_sigma_sq = self._recognition_network()
-
-        eps = tf.random_normal(shape=tf.shape(self.z_mean), mean=0, stddev=1, dtype=tf.float32)
-        # z = mu + sigma*epsilon
-        self.z = tf.add(self.z_mean, tf.multiply(tf.sqrt(tf.exp(self.z_log_sigma_sq)), eps))
-
-        # Use generator to determine mean of
-        # Bernoulli distribution of reconstructed input
-        self.x_reconstr_mean = self._generator_network()
-
-    def _recognition_network(self):
-        # Generate probabilistic encoder (recognition network), which
-        # maps inputs onto a normal distribution in latent space.
-        # The transformation is parametrized and can be learned.
-
-        recog_descriptor = self.network_architecture.Enc_network
-
-        w_mean = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
-        w_log_sigma = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
-        b_mean = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32)),
-        b_log_sigma = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32))
-
-        self.recog_network = Network(recog_descriptor)
-        self.recog_network.network_initialization()
-        layer_2 = self.recog_network.network_evaluation(self.x)
-        z_mean = tf.add(tf.matmul(layer_2, w_mean), b_mean)
-        z_log_sigma_sq = tf.add(tf.matmul(layer_2, w_log_sigma), b_log_sigma)
-        return z_mean, z_log_sigma_sq
-
-    def _generator_network(self):
-        # Generate probabilistic decoder (decoder network), which
-        # maps points in latent space onto a Bernoulli distribution in data space.
-        # The transformation is parametrized and can be learned.
-        gen_descriptor = self.network_architecture.Dec_network
-        self.gen_network = Network(gen_descriptor)
-        self.gen_network.network_initialization()
-        x_reconstr_mean = self.gen_network.network_evaluation(self.z)
-        return x_reconstr_mean
-
-    def _create_loss_optimizer(self):
-
-        self.Div_Function(self)
-        latent_loss = -0.5 * tf.reduce_sum(1 + self.z_log_sigma_sq - tf.square(self.z_mean) - tf.exp(self.z_log_sigma_sq), 1)
-
-        self.cost = tf.reduce_mean(self.reconstr_loss + latent_loss)
-
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.cost)
-
-    def vae_mse_div(self):
-        # E[log P(X|z)]
-        self.reconstr_loss = 1000*tf.losses.mean_squared_error(predictions=self.x_reconstr_mean, labels=self.x)
-
-    def vae_log_prob(self):
-        self.reconstr_loss = -tf.reduce_sum(self.x * tf.log(1e-10 + self.x_reconstr_mean) + (1-self.x) * tf.log(1e-10 + 1 - self.x_reconstr_mean), 1)
-
-    Divergence_Functions = {"VAE_Log_Prob": vae_log_prob, "VAE_MSE_Div": vae_mse_div}
-
-    def partial_fit(self, x, _):
-        """Train model based on mini-batch of input data.
-
-        Return cost of mini-batch.
-        """
-        _, cost = self.sess.run((self.optimizer, self.cost), feed_dict={self.x: x})
-
-        return cost
-
-    def transform(self, x):
-        """Transform data by mapping it into the latent space."""
-        # Note: This maps to mean of distribution, we could alternatively
-        # sample from Gaussian distribution
-        return self.sess.run(self.z_mean, feed_dict={self.x: x})
-
-    def generate(self, samples, _):
-        """ Generate data by sampling from latent space.
-
-        If z_mu is not None, data for this point in latent space is
-        generated. Otherwise, z_mu is drawn from prior in latent
-        space.
-        """
-
-        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
-        # Note: This maps to mean of distribution, we could alternatively
-        # sample from Gaussian distribution
-        return self.sess.run(self.x_reconstr_mean, feed_dict={self.z: np.reshape(z_mu, (samples, -1))})
-
-    def reconstruct(self, x):
-        """ Use VAE to reconstruct given data. """
-        return self.sess.run(self.x_reconstr_mean,
-                             feed_dict={self.x: x})
-
-
-def train(batch_size=100, epochs=10, display_step=299):
-
-    # Training cycle
-    batch_i = 0
-    for epoch in range(epochs):
-        avg_cost = 0.
-        total_batch = int(n_samples / batch_size)
-        # Loop over all batches
-        for _ in range(total_batch):
-            batch_i, batch_xs, batch_ys = batch(ps_all_x, objs, batch_size, batch_i)
-            # Fit training using batch data
-            cost = vae.partial_fit(batch_xs, batch_ys)
-
-            # Compute average loss
-            avg_cost += cost / n_samples * batch_size
-
-        # Display logs per epoch step
-        if epoch % display_step == 0:
-            print("Epoch:", '%04d' % (epoch+1),
-                  "cost=", "{:.9f}".format(avg_cost))
-    return vae
-
-
-class VAE_E(VAE):
-
-    def __init__(self, network_architecture, objectives):
-
-        self.objectives = objectives
-        self.approximation = None
-        self.obj = tf.placeholder(tf.float32, shape=[None, self.objectives.shape[1]])
-
-        super().__init__(network_architecture)
-
-    def _approximation_network(self):
-        # Generate probabilistic decoder (decoder network), which
-        # maps points in latent space onto a Bernoulli distribution in data space.
-        # The transformation is parametrized and can be learned.
-        app_descriptor = self.network_architecture.App_network
-        self.app_network = Network(app_descriptor)
-        self.app_network.network_initialization()
-        approximation = self.app_network.network_evaluation(self.z)
-
-        return approximation
-
-    def _create_network(self):
-
-        super()._create_network()
-        self.approximation = self._approximation_network()
-
-    def _create_loss_optimizer(self):
-
-        self.Div_Function(self)
-
-        latent_loss = -0.5 * tf.reduce_sum(1 + self.z_log_sigma_sq - tf.square(self.z_mean) - tf.exp(self.z_log_sigma_sq), 1)
-
-        self.app_cost = 10*tf.losses.mean_squared_error(predictions=self.approximation, labels=self.obj)
-
-        self.cost = tf.reduce_mean(self.reconstr_loss + latent_loss + self.app_cost)
-
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.cost)
-
-    def predict_from_z(self, samples):
-
-        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
-        return self.sess.run(self.approximation, feed_dict={self.z: np.reshape(z_mu, (samples, -1))})
-
-    def predict_from_x(self, x):
-        return self.sess.run(self.approximation, feed_dict={self.x: x})
-
-    def partial_fit(self, x, obj):
-        """Train model based on mini-batch of input data.
-
-        Return cost of mini-batch.
-        """
-        _, cost = self.sess.run((self.optimizer, self.cost), feed_dict={self.x: x, self.obj: obj})
-
-        return cost
-
-
-class VAE_E_E(VAE_E):
-
-    def __init__(self, network_architecture, objectives):
-        super().__init__(network_architecture, objectives)
-
-    def _generator_network(self):
-        # Generate probabilistic decoder (decoder network), which
-        # maps points in latent space onto a Bernoulli distribution in data space.
-        # The transformation is parametrized and can be learned.
-        gen_descriptor = self.network_architecture.Dec_network
-        self.gen_network = Network(gen_descriptor)
-        self.gen_network.network_initialization()
-        x_reconstr_mean = self.gen_network.network_evaluation(tf.concat((self.z, self.obj), axis=1))
-        return x_reconstr_mean
-
-    def _approximation_network(self):
-        # Generate probabilistic decoder (decoder network), which
-        # maps points in latent space onto a Bernoulli distribution in data space.
-        # The transformation is parametrized and can be learned.
-        app_descriptor = self.network_architecture.App_network
-        self.app_network = Network(app_descriptor)
-        self.app_network.network_initialization()
-
-        approximation = self.app_network.network_evaluation(tf.concat((self.z, self.obj), axis=1))
-        return approximation
-
-    def generate(self, samples, objs):
-        """ Generate data by sampling from latent space.
-
-        If z_mu is not None, data for this point in latent space is
-        generated. Otherwise, z_mu is drawn from prior in latent
-        space.
-        """
-
-        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
-        # Note: This maps to mean of distribution, we could alternatively
-        # sample from Gaussian distribution
-
-        return self.sess.run(self.x_reconstr_mean, feed_dict={self.z: np.reshape(z_mu, (samples, -1)), self.obj: objs[np.random.randint(objs.shape[0], size=objs.shape[0]), :]})
 
 
 def create_descriptor():
@@ -376,6 +131,12 @@ def create_descriptor():
 
     my_vae_descriptor.vae_approximator_initialization(approx_n_hidden, approx_dim_list, approx_init_functions,  approx_act_functions)
 
+    if type == "VAE":
+            my_vae_descriptor.Dec_network.input_dim = my_vae_descriptor.z_dim
+    if type == "VAEE":
+            my_vae_descriptor.Dec_network.input_dim = my_vae_descriptor.z_dim
+            my_vae_descriptor.App_network.input_dim = my_vae_descriptor.z_dim
+
     return my_vae_descriptor
 
 
@@ -419,12 +180,14 @@ if __name__ == "__main__":
         tf.reset_default_graph()
 
         vae_desc = create_descriptor()
+
         start = time.time()
-        vae = VAE_E_E(vae_desc, objs)
+        vae = VAEEE(vae_desc, objs.shape[1])
 
-        vae = train(epochs=training_epochs)
+        vae.train(epochs=training_epochs, objs=objs, data=ps_all_x)
 
-        aux = vae.generate(1000, objs)
+        aux = vae.generate(1000, objs)[0]
+        print(aux)
         igd_val = plot(aux)
         vae_ee_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
 
@@ -434,26 +197,28 @@ if __name__ == "__main__":
         vae_desc.App_network.input_dim = z_dim
 
         start = time.time()
-        vae = VAE_E(vae_desc, objs)
-        vae = train(epochs=training_epochs)
+        vae = VAEE(vae_desc, objs.shape[1])
+        vae.train(epochs=training_epochs, objs=objs, data=ps_all_x)
 
-        aux = vae.generate(1000, None)
+        aux = vae.generate(1000, objs)[0]
         igd_val = plot(aux)
         vae_e_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
 
         print("VAE_E IGD: " + str(igd_val))
 
         start = time.time()
-        vae = VAE(vae_desc)
-        vae = train(epochs=training_epochs)
+
+        vae = VAE(vae_desc, objs.shape[1])
+        vae.train(epochs=training_epochs, objs=None, data=ps_all_x)
         _, x_sample, y_sample = batch(ps_all_x, objs, 50, 0)
 
-        aux = vae.generate(1000, None)
+        aux = vae.generate(1000, objs)
         igd_val = plot(aux)
         vae_cod += [[myseed, time.time()-start] + vae.network_architecture.codify_components(n_layers, init_functions, act_functions, divergence_measures, lat_functions) + [igd_val]]
         print("VAE IGD: " + str(igd_val))
+
         myseed += 50
 
     np.savetxt("results/VAE_E_F" + Function + "seed" + str(myseed) + ".csv", vae_e_cod)
-    np.savetxt("results/VAE_EE_F" + Function + "seed" + + str(myseed) + ".csv", vae_ee_cod)
-    np.savetxt("results/VAE_F" + Function + "seed" + + str(myseed) + ".csv", vae_cod)
+    np.savetxt("results/VAE_EE_F" + Function + "seed" + str(myseed) + ".csv", vae_ee_cod)
+    np.savetxt("results/VAE_F" + Function + "seed" + str(myseed) + ".csv", vae_cod)

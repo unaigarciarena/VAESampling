@@ -7,22 +7,22 @@ import copy
 
 
 ###################################################################################################
-# Auxiliary Functions
+# ######## Auxiliary Functions
 ###################################################################################################
 
-def plot(samples, the_shape):
+def plot(samples, theshape):
     fig = plt.figure(figsize=(5, 5))
     gs = gridspec.GridSpec(5, 5)
     gs.update(wspace=0.05, hspace=0.05)
 
-    for i, sample in enumerate(samples[:25, :]):    # enumerate(samples):
+    for i, sample in enumerate(samples[:25, :]):  # enumerate(samples):
         ax = plt.subplot(gs[i])
         plt.axis('off')
         ax.set_xticklabels([])
         ax.set_yticklabels([])
         ax.set_aspect('equal')
-        # plt.imshow(sample.reshape(the_shape), cmap='Greys_r')
-        plt.imshow(sample.reshape(the_shape))
+        # plt.imshow(sample.reshape(theshape), cmap='Greys_r')
+        plt.imshow(sample.reshape(theshape))
 
     return fig
 
@@ -30,28 +30,60 @@ def plot(samples, the_shape):
 def next_random_batch(num, data):
 
     """
-    Return a total of `num` random samples and labels. 
+    Return a total of `num` random samples and labels.
     """
     idx = np.arange(0, len(data))
     np.random.shuffle(idx)
-    idx = idx[:num]    
-    data_shuffle = data[idx, :]
+    idx = idx[:num]
+    data_shuffle = np.array(data)[idx]
     return data_shuffle
 
 
 def next_batch(num, data, start):
 
     """
-    Return a total of `num` samples and labels. 
+    Return a total of `num` samples and labels.
     """
     idx = np.arange(start, np.min([start+num, len(data)]))
-    return data[idx, :]
+
+    return np.array(data)[idx]
+
+def batch(x, y, size, i):
+    """
+    :param x: Poplation; set of solutions intended to be fed to the net in the input
+    :param y: Fitness scores of the population, intended to be fed to the net in the output
+    :param size: Size of the batch desired
+    :param i: Index of the last solution used in the last epoch
+    :return: The index of the last solution in the batch (to be provided to this same
+             function in the next epoch, the solutions in the actual batch, and their
+             respective fitness scores
+    """
+
+    if i + size > x.shape[0]:  # In case there are not enough solutions before the end of the array
+        index = i + size-x.shape[0]  # Select all the individuals until the end and restart
+        if y is not None:
+            return index, np.concatenate((x[i:, :], x[:index, :])), np.concatenate((y[i:], y[:index]))
+        else:
+            return index, np.concatenate((x[i:, :], x[:index, :])), None
+    else:  # Easy case
+        index = i+size
+        if y is not None:
+            return index, x[i:index, :], y[i:index]
+        else:
+            return index, x[i:index, :], None
 
 
-def xavier_init(shape):
-    in_dim = shape[0]
-    xavier_stddev = 1. / tf.sqrt(in_dim / 2.)
-    return tf.random_normal(shape=shape, stddev=xavier_stddev)
+
+def xavier_init(fan_in=None, fan_out=None, shape=None, constant=1):
+    """ Xavier initialization of network weights"""
+    if fan_in is None:
+        fan_in = shape[0]
+        fan_out = shape[1]
+    # https://stackoverflow.com/questions/33640581/how-to-do-xavier-initialization-on-tensorflow
+    low = -constant*np.sqrt(6.0/(fan_in + fan_out))
+    high = constant*np.sqrt(6.0/(fan_in + fan_out))
+    return tf.random_uniform((int(fan_in), int(fan_out)),
+                             minval=low, maxval=high)
 
 
 # This function set the seeds of the tensorflow function
@@ -61,10 +93,8 @@ def reset_graph(seed=42):
     tf.reset_default_graph()
     tf.set_random_seed(seed)
 
-
 ###############################################################################################################################
-# ########################################################## Network Descriptor ###############################################
-###############################################################################################################################
+# ########################################################## Network Descriptor #######################################################################################################################################################################################
 
 
 class NetworkDescriptor:
@@ -77,7 +107,7 @@ class NetworkDescriptor:
         self.List_act_functions = list_act_functions
         self.number_loop_train = number_loop_train
 
-    def copy_from_other_network(self, other_network):
+    def copy_from_othernetwork(self, other_network):       
         self.number_hidden_layers = other_network.number_hidden_layers
         self.input_dim = other_network.input_dim
         self.output_dim = other_network.output_dim  
@@ -87,6 +117,7 @@ class NetworkDescriptor:
         self.number_loop_train = other_network.number_loop_train
 
     def network_add_layer(self, layer_pos, lay_dims, init_w_function, init_a_function):
+
         """
         Function: network_add_layer()
         Adds a layer at a specified position, with a given  number of units, init weight
@@ -148,6 +179,7 @@ class NetworkDescriptor:
         # If not within feasible bounds, return
         if layer_pos < 0 or layer_pos > self.number_hidden_layers:
             return
+        # print(layer_pos, "Old act fn ",self.List_act_functions[layer_pos], "New act fn", new_act_fn)
         self.List_act_functions[layer_pos] = new_act_fn
 
     def change_weight_init_fn_in_layer(self, layer_pos, new_weight_fn):
@@ -203,11 +235,10 @@ class NetworkDescriptor:
             aux_a.append(ref_list_act_functions.index(act_f))
         code = code + aux_a + [-1]*(max_total_layers-len(aux_a))
  
-        return code
+        return code 
 
 ###############################################################################################################################
-# ########################################################## Network ##########################################################
-###############################################################################################################################
+# ########################################################## Network #######################################################################################################################################################################################
 
 
 class Network:
@@ -216,20 +247,21 @@ class Network:
         self.List_layers = []
         self.List_weights = []        
         self.List_bias = []
-     
+        self.List_dims = []
+        self.List_init_functions = []
+        self.List_act_functions = []
+
     def reset_network(self):  
         self.List_layers = []
         self.List_weights = []        
-        self.List_bias = []
+        self.List_bias = []   
+        self.List_dims = []
+        self.List_init_functions = []
+        self.List_act_functions = []
 
     @staticmethod
     def create_hidden_layer(in_size, out_size, init_w_function, layer_name):
-        if "uniform" in init_w_function.__name__:
-            w = tf.Variable(init_w_function(shape=[in_size, out_size], minval=-0.1, maxval=0.1), name="W"+layer_name)
-        elif "normal" in init_w_function.__name__:
-            w = tf.Variable(init_w_function(shape=[in_size, out_size], mean=0, stddev=0.03), name="W"+layer_name)
-        else:
-            w = tf.Variable(init_w_function(shape=[in_size, out_size]), name="W"+layer_name)
+        w = tf.Variable(init_w_function(shape=[in_size, out_size]), name="W"+layer_name)
         b = tf.Variable(tf.zeros(shape=[out_size]), name="b"+layer_name)
         return w, b
     
@@ -258,21 +290,17 @@ class Network:
             b = self.List_bias[lay] 
             act = self.descriptor.List_act_functions[lay]
             if act is None:
-                layer = tf.add(tf.matmul(layer, w), b)
+                layer = tf.matmul(layer, w) + b
             else:
-                #if lay == self.descriptor.number_hidden_layers:
-                    #layer = tf.matmul(layer, w) + b
-                #else:
-                layer = act(tf.add(tf.matmul(layer, w), b))
-
+                if act is not None:
+                    layer = act(tf.matmul(layer, w) + b)
             self.List_layers.append(layer)    
 
         return layer
 
-###############################################################################################################################
-# ########################################################## GAN Descriptor  ##################################################
-# #############################################################################################################################
 
+###############################################################################################################################
+# ########################################################## GAN Descriptor  #######################################################################################################################################################################################
 
 class GANDescriptor:
     def __init__(self, x_dim, z_dim, latent_distribution_function=np.random.uniform, fmeasure="Standard_Divergence"):
@@ -280,8 +308,8 @@ class GANDescriptor:
         self.z_dim = z_dim
         self.latent_distribution_function = latent_distribution_function
         self.fmeasure = fmeasure
-        self.Gen_network = None
-        self.Disc_network = None
+        self.Gen_network = []
+        self.Disc_network = []
 
     def copy_from_other(self, other):
         self.X_dim = other.X_dim
@@ -294,18 +322,16 @@ class GANDescriptor:
         self.Disc_network = copy.deepcopy(other.Disc_network)
 
     def gan_generator_initialization(self, generator_n_hidden, generator_dim_list, generator_init_functions,
-                                     generator_act_functions, generator_number_loop_train=1):
+                                     generator_act_functions, generator_number_loop_train):
 
-        self.Gen_network = NetworkDescriptor(generator_n_hidden, self.z_dim,
-                                             self.X_dim, generator_dim_list, generator_init_functions,
-                                             generator_act_functions, generator_number_loop_train)
+        self.Gen_network = NetworkDescriptor(generator_n_hidden, self.z_dim, self.X_dim, generator_dim_list,
+                                             generator_init_functions, generator_act_functions, generator_number_loop_train)
 
     def gan_discriminator_initialization(self, discriminator_n_hidden, discriminator_dim_list, discriminator_init_functions,
-                                         discriminator_act_functions, discriminator_number_loop_train=1):
+                                         discriminator_act_functions, discriminator_number_loop_train):
         output_dim = 1     
-        self.Disc_network = NetworkDescriptor(discriminator_n_hidden, self.X_dim,
-                                              output_dim, discriminator_dim_list, discriminator_init_functions,
-                                              discriminator_act_functions, discriminator_number_loop_train)
+        self.Disc_network = NetworkDescriptor(discriminator_n_hidden, self.X_dim, output_dim, discriminator_dim_list,
+                                              discriminator_init_functions, discriminator_act_functions, discriminator_number_loop_train)
 
     def print_components(self):
         self.Gen_network.print_components("Gen")
@@ -332,9 +358,8 @@ class GANDescriptor:
 
 
 ###################################################################################################
-# ############################################ GAN  ###############################################
+# ############################################ GAN  ################################################
 ###################################################################################################
-
 
 class GAN:
     def __init__(self, gan_descriptor):
@@ -355,7 +380,7 @@ class GAN:
         self.D_loss = 0
         self.fmeasure = None
 
-    def reset_network(self):  
+    def reset_network(self):
         self.Gen_network.reset_network()
         self.Disc_network.reset_network()
 
@@ -366,7 +391,7 @@ class GAN:
         g_log_prob = self.Gen_network.network_evaluation(z)
         g_prob = tf.nn.sigmoid(g_log_prob)
         return g_prob
- 
+
     def discriminator(self, x):
         d_logit = self.Disc_network.network_evaluation(x)
         d_prob = tf.nn.sigmoid(d_logit)
@@ -375,8 +400,8 @@ class GAN:
     def training_definition(self, lr):
         # =============================== TRAINING ====================================
 
-        self.X = tf.placeholder(tf.float32, shape=[None, self.descriptor.X_dim])
-        self.Z = tf.placeholder(tf.float32, shape=[None, self.descriptor.z_dim])
+        self.X = tf.placeholder(tf.float32, shape=[None, self.descriptor.X_dim], name="PlaceholderX")
+        self.Z = tf.placeholder(tf.float32, shape=[None, self.descriptor.z_dim], name="PlaceholderZ")
 
         self.Gen_network = Network(self.descriptor.Gen_network)
         self.Disc_network = Network(self.descriptor.Disc_network)
@@ -388,7 +413,7 @@ class GAN:
                 self.G_sample = self.generator(self.Z)
         with tf.variable_scope('Disc1') as scope:
                 self.D_real, self.D_logit_real = self.discriminator(self.X)
-        with tf.variable_scope('Disc2') as scope:    
+        with tf.variable_scope('Disc2') as scope:
                 self.D_fake, self.D_logit_fake = self.discriminator(self.G_sample)
 
         self.Div_Function(self)
@@ -406,7 +431,7 @@ class GAN:
 
         if batch_type == "random":
                     batch_function = next_random_batch
-        else: 
+        else:
                     batch_function = next_batch
 
         i = 0
@@ -427,7 +452,7 @@ class GAN:
 
         samples = sess.run(self.G_sample, feed_dict={self.Z: self.sample_z(n_samples, self.descriptor.z_dim)})
 
-        return samples 
+        return samples
 
     def separated_running(self, batch_type, data, mb_size, number_iterations, n_samples, print_cycle):
         config = tf.ConfigProto(device_count={'GPU': 0})
@@ -438,7 +463,7 @@ class GAN:
             os.makedirs('gan_out/')
         if batch_type == "random":
                     batch_function = next_random_batch
-        else: 
+        else:
                     batch_function = next_batch
 
         i = 0
@@ -467,7 +492,7 @@ class GAN:
 
         samples = sess.run(self.G_sample, feed_dict={self.Z: self.sample_z(n_samples, self.descriptor.z_dim)})
 
-        return samples 
+        return samples
 
     def standard_divergence(self):
             self.D_loss = -tf.reduce_mean(self.D_logit_real) + tf.reduce_mean(self.D_logit_fake)
@@ -511,8 +536,8 @@ class GAN:
 
 
 ###############################################################################################################################
-# ########################################################## VAE_E_E Descriptor  ##############################################
-###############################################################################################################################
+# ########################################################## VAE Descriptor  #######################################################################################################################################################################################
+
 
 class VAEESDescriptor:
     def __init__(self, x_dim, z_dim, objectives, latent_distribution_function,  fmeasure):
@@ -589,410 +614,266 @@ class VAEESDescriptor:
 
         return code
 
-###################################################################################################
-# ############################################ VAE  ###############################################
-###################################################################################################
 
+class VAE(object):
+    """ Variation Autoencoder (VAE) with an sklearn-like interface implemented using TensorFlow.
 
-class VAE:
-    def __init__(self, vae_descriptor):
-        self.descriptor = vae_descriptor
-        self.Div_Function = self.Divergence_Functions[self.descriptor.fmeasure]
-        self.Enc_network = None
-        self.Dec_network = None
-        self.X = None
-        self.Z = None
-        self.z_mu = None
-        self.z_logvar = None
-        self.logits = None
-        self.z_sample = None
-        self.X_samples = None
-        self.solver = None
-        self.kl_loss = None
-        self.vae_loss = None
-        self.recon_loss = None
+    This implementation uses probabilistic encoders and decoders using Gaussian
+    distributions and  realized by multi-layer perceptrons. The VAE can be learned
+    end-to-end.
 
-    def reset_network(self):  
-        self.Enc_network.reset_network()
-        self.Dec_network.reset_network()
+    See "Auto-Encoding Variational Bayes" by Kingma and Welling for more details.
+    """
+    def __init__(self, network_architecture, _, learning_rate=0.001, batch_size=100):
+        self.network_architecture = network_architecture
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
+        self.Div_Function = self.Divergence_Functions[self.network_architecture.fmeasure]
 
-    def sample_z(self):
-        # Currently sample_Z is implemented for Normal distribution. Alternative posteriors distributions
-        # could be implemented, but loss function should be modified accordingly
-        eps = tf.random_normal(shape=tf.shape(self.z_mu))
-        return self.z_mu + tf.exp(self.z_logvar / 2) * eps
+        # tf Graph input
+        self.x = tf.placeholder(tf.float32, [None, network_architecture.X_dim], name="PlaceholderX")
+        self.reconstr_loss = None
+        # Create autoencoder network
+        self._create_network()
+        # Define loss function based variational upper-bound and
+        # corresponding optimizer
+        self._create_loss_optimizer()
 
-    def encoder(self, x):
-        # print(self.descriptor.Enc_network.output_dim)
+        # Initializing the tensor flow variables
+        init = tf.global_variables_initializer()
 
-        z = self.Enc_network.network_evaluation(x)
+        # Launch the session
+        self.sess = tf.InteractiveSession()
+        self.sess.run(init)
 
-        q_w2_mu = tf.Variable(xavier_init([self.descriptor.z_dim, self.descriptor.z_dim]))
-        q_b2_mu = tf.Variable(tf.zeros(shape=[self.descriptor.z_dim]))
-        
-        q_w2_sigma = tf.Variable(xavier_init([self.descriptor.z_dim, self.descriptor.z_dim]))
-        q_b2_sigma = tf.Variable(tf.zeros(shape=[self.descriptor.z_dim]))
+    def reinitialize_net(self):
+        self.sess.run(tf.global_variables_initializer())
 
-        z_mu = tf.matmul(z, q_w2_mu) + q_b2_mu
-        z_logvar = tf.matmul(z, q_w2_sigma) + q_b2_sigma
+    def _create_network(self):
+        # Use recognition network to determine mean and
+        # (log) variance of Gaussian distribution in latent
+        # space
 
-        return z_mu, z_logvar
- 
-    def decoder(self, z):
-        x_logit = self.Dec_network.network_evaluation(z)
-        x_prob = tf.nn.sigmoid(x_logit) 
-        return x_prob, x_logit
+        self.z_mean, self.z_log_sigma_sq = self._recognition_network()
 
-    def training_definition(self, lr):
-        # =============================== VAE TRAINING ====================================
+        eps = tf.random_normal(shape=tf.shape(self.z_mean), mean=0, stddev=1, dtype=tf.float32)
+        # z = mu + sigma*epsilon
+        self.z = tf.add(self.z_mean, tf.multiply(tf.sqrt(tf.exp(self.z_log_sigma_sq)), eps))
 
-        self.X = tf.placeholder(tf.float32, shape=[None, self.descriptor.X_dim])
-        self.Z = tf.placeholder(tf.float32, shape=[None, self.descriptor.z_dim])
+        # Use generator to determine mean of
+        # Bernoulli distribution of reconstructed input
 
-        self.Enc_network = Network(self.descriptor.Enc_network)
-        self.Dec_network = Network(self.descriptor.Dec_network)
+        self.x_reconstr_mean = self._generator_network()
 
-        self.Enc_network.network_initialization()
-        self.Dec_network.network_initialization()
+    def _recognition_network(self):
+        # Generate probabilistic encoder (recognition network), which
+        # maps inputs onto a normal distribution in latent space.
+        # The transformation is parametrized and can be learned.
 
-        with tf.variable_scope('Enc1') as scope:
-                self.z_mu, self.z_logvar = self.encoder(self.X)
-                self.z_sample = self.sample_z()
+        recog_descriptor = self.network_architecture.Enc_network
 
-        with tf.variable_scope('Dec1') as scope:
-                _, self.logits = self.decoder(self.z_sample)
-                # Sampling from random z
-                self.X_samples, _ = self.decoder(self.Z)
+        w_mean = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
+        w_log_sigma = tf.Variable(xavier_init(recog_descriptor.output_dim, self.network_architecture.z_dim))
+        b_mean = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32)),
+        b_log_sigma = tf.Variable(tf.zeros([self.network_architecture.z_dim], dtype=tf.float32))
 
-        self.vae_loss_func()
+        self.recog_network = Network(recog_descriptor)
+        self.recog_network.network_initialization()
+        layer_2 = self.recog_network.network_evaluation(self.x)
+        z_mean = tf.add(tf.matmul(layer_2, w_mean), b_mean)
+        z_log_sigma_sq = tf.add(tf.matmul(layer_2, w_log_sigma), b_log_sigma)
+        return z_mean, z_log_sigma_sq
 
-        self.solver = tf.train.AdamOptimizer(learning_rate=lr).minimize(self.vae_loss)
+    def _generator_network(self):
 
-    def vae_loss_func(self):
+        # Generate probabilistic decoder (decoder network), which
+        # maps points in latent space onto a Bernoulli distribution in data space.
+        # The transformation is parametrized and can be learned.
 
-        #self.Div_Function(self)
+        gen_descriptor = self.network_architecture.Dec_network
 
-        # D_KL(Q(z|X) || P(z)); calculate in closed form as both dist. are Gaussian
-        #self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.z_logvar) + self.z_mu**2 - 1. - self.z_logvar, 1)
+        self.gen_network = Network(gen_descriptor)
 
-        # VAE loss
-        #self.vae_loss = tf.reduce_mean(self.recon_loss + self.kl_loss)
+        self.gen_network.network_initialization()
+        x_reconstr_mean = tf.nn.sigmoid(self.gen_network.network_evaluation(self.z))
+        return x_reconstr_mean
 
-        reconstr_loss = -tf.reduce_sum(self.X * tf.log(1e-10 + self.logits) + (1-self.X) * tf.log(1e-10 + 1 - self.logits), 1)
+    def _create_loss_optimizer(self):
 
-        latent_loss = -0.5 * tf.reduce_sum(1 + self.z_logvar - tf.square(self.z_mu) - tf.exp(self.z_logvar), 1)
+        self.Div_Function(self)
+        self.latent_loss = -0.0005 * tf.reduce_sum(1 + self.z_log_sigma_sq - tf.square(self.z_mean) - tf.exp(self.z_log_sigma_sq), 1)
 
-        self.vae_loss = tf.reduce_mean(reconstr_loss + latent_loss)   # average over batch
+        self.cost = tf.reduce_mean(self.reconstr_loss + self.latent_loss)
 
-
-    def vae_gaussian_div(self):
-        # E[log P(X|z)]
-        self.recon_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=self.X), 1)
-        # self.recon_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=self.X), 1) + tf.losses.mean_squared_error(predictions=logits, labels=self.X)
+        self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.cost)
 
     def vae_mse_div(self):
         # E[log P(X|z)]
-        self.recon_loss = tf.losses.mean_squared_error(predictions=self.logits, labels=self.X)
+        self.reconstr_loss = tf.losses.mean_squared_error(predictions=self.x_reconstr_mean, labels=self.x)
 
-    Divergence_Functions = {"VAE_Gaussian_Div": vae_gaussian_div, "VAE_MSE_Div": vae_mse_div}
+    def vae_log_prob(self):
+        self.reconstr_loss = -tf.reduce_sum(self.x * tf.log(1e-10 + self.x_reconstr_mean) + (1-self.x) * tf.log(1 - self.x_reconstr_mean), 1)
 
-    def running(self, batch_type, data, mb_size, number_iterations, n_samples, print_cycle):
-        config = tf.ConfigProto(device_count={'GPU': 0})
-        sess = tf.Session(config=config)
+    Divergence_Functions = {"VAE_Log_Prob": vae_log_prob, "VAE_MSE_Div": vae_mse_div}
 
-        sess.run(tf.global_variables_initializer())
+    def partial_fit(self, x, _):
+        """Train model based on mini-batch of input data.
 
-        if batch_type == "random":
-                    batch_function = next_random_batch
-        else: 
-                    batch_function = next_batch
+        Return cost of mini-batch.
+        """
+        _, cost1, cost2 = self.sess.run((self.optimizer, self.reconstr_loss, self.latent_loss), feed_dict={self.x: x})
 
-        i = 0
-        for it in range(number_iterations):
+        return np.sum(cost1), np.sum(cost2)
 
-            x_mb = batch_function(mb_size, data, i)
-            i = i+mb_size if (i+mb_size) < len(data) else 0
+    def transform(self, x):
+        """Transform data by mapping it into the latent space."""
+        # Note: This maps to mean of distribution, we could alternatively
+        # sample from Gaussian distribution
+        return self.sess.run(self.z_mean, feed_dict={self.x: x})
 
-            _, loss = sess.run([self.solver, self.vae_loss], feed_dict={self.X: x_mb})
+    def generate(self, samples, _):
+        """ Generate data by sampling from latent space.
 
-            if it % print_cycle == 0:
+        If z_mu is not None, data for this point in latent space is
+        generated. Otherwise, z_mu is drawn from prior in latent
+        space.
+        """
 
-                print()
-                print('Iter: {}'.format(it))
-                print(sess.run([self.z_mu, self.z_logvar], feed_dict={self.X: x_mb}))
-                # print('R Loss: {:.4}'. format(sess.run(self.recon_loss, feed_dict={self.X: x_mb})))
-                # print(sess.run(self.kl_loss, feed_dict={self.X: x_mb}))
+        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
+        # Note: This maps to mean of distribution, we could alternatively
+        # sample from Gaussian distribution
+        samples = self.sess.run(self.x_reconstr_mean, feed_dict={self.z: np.reshape(z_mu, (samples, -1))})
+        #print("Samples")
+        #print(np.min(samples), np.max(samples))
 
-        samples = sess.run(self.X_samples, feed_dict={self.Z:  np.random.randn(n_samples, self.descriptor.z_dim)})
-        print(samples)
-        return samples 
+        return samples
 
-###################################################################################################
-# ########################################### VAE_E ###############################################
-###################################################################################################
+    def reconstruct(self, x):
+        """ Use VAE to reconstruct given data. """
+        return self.sess.run(self.x_reconstr_mean,
+                             feed_dict={self.x: x})
+
+    def train(self, data, objs, batch_size=10, epochs=10, display_step=100):
+
+        # Training cycle
+        batch_i = 0
+        n_samples = data.shape[0]
+        #print("Data")
+        #print(np.min(data), np.max(data))
+        for epoch in range(epochs):
+            avg_cost = 0.
+            total_batch = int(n_samples / batch_size)
+            # Loop over all batches
+            for _ in range(total_batch):
+                batch_i, batch_xs, batch_ys = batch(data, objs, batch_size, batch_i)
+                # Fit training using batch data
+                # print(self.sess.run(self.x_reconstr_mean, feed_dict={self.x: batch_xs, self.obj: batch_ys}))
+                cost = self.partial_fit(batch_xs, batch_ys)
+                # Compute average loss
+                #avg_cost += cost / n_samples * batch_size
+
+            # Display logs per epoch step
+            if epoch % display_step == 0 and False:
+                print("Epoch:", '%04d' % (epoch+1),
+                      "cost=" + str(cost))
 
 
-class VAEE:
-    def __init__(self, vae_descriptor):
-        self.descriptor = vae_descriptor
-        self.Div_Function = self.Divergence_Functions[self.descriptor.fmeasure]
-        self.Enc_network = None
-        self.Dec_network = None
-        self.App_network = None
-        self.X = None
-        self.F = None
-        self.Z = None
-        self.z_mu = None
-        self.z_logvar = None
-        self.z_sample = None
-        self.logits = None
-        self.X_samples = None
-        self.pred_f = None
-        self.solver = None
-        self.recon_loss = None
-        self.kl_loss = None
-        self.app_loss = None
-        self.vae_loss = None
+class VAEE(VAE):
 
-    def reset_network(self):
-        self.Enc_network.reset_network()
-        self.Dec_network.reset_network()
-        self.App_network.reset_network()
+    def __init__(self, network_architecture, objectives):
 
-    def sample_z(self):
-        # Currently sample_Z is implemented for Normal distribution. Alternative posteriors distributions
-        # could be implemented, but loss function should be modified accordingly
-        eps = tf.random_normal(shape=tf.shape(self.z_mu))
-        return self.z_mu + tf.exp(self.z_logvar / 2) * eps
+        self.objectives = objectives
+        self.approximation = None
+        self.obj = tf.placeholder(tf.float32, shape=[None, self.objectives], name="PlaceholderObjs")
 
-    def encoder(self, x):
-        z_log_prob = self.Enc_network.network_evaluation(x)
-        z_prob = tf.nn.sigmoid(z_log_prob)
-        return z_prob, z_log_prob
+        super().__init__(network_architecture, objectives)
 
-    def decoder(self, z):
-        x_logit = self.Dec_network.network_evaluation(z)
-        x_prob = tf.nn.sigmoid(x_logit)
-        return x_prob, x_logit
+    def _approximation_network(self):
+        # Generate probabilistic decoder (decoder network), which
+        # maps points in latent space onto a Bernoulli distribution in data space.
+        # The transformation is parametrized and can be learned.
+        app_descriptor = self.network_architecture.App_network
+        self.app_network = Network(app_descriptor)
+        self.app_network.network_initialization()
+        approximation = self.app_network.network_evaluation(self.z)
 
-    def approximator(self, f):
-        f = self.App_network.network_evaluation(f)
-        return f
+        return approximation
 
-    def training_definition(self, lr):
-        # =============================== VAE TRAINING ====================================
+    def _create_network(self):
 
-        self.X = tf.placeholder(tf.float32, shape=[None, self.descriptor.X_dim])
-        self.Z = tf.placeholder(tf.float32, shape=[None, self.descriptor.z_dim], name="Z")
-        self.F = tf.placeholder(tf.float32, shape=[None, self.descriptor.objectives])
+        super()._create_network()
 
-        self.Enc_network = Network(self.descriptor.Enc_network)
-        self.Dec_network = Network(self.descriptor.Dec_network)
-        self.App_network = Network(self.descriptor.App_network)
+        self.approximation = self._approximation_network()
 
-        self.Enc_network.network_initialization()
-        self.Dec_network.network_initialization()
-        self.App_network.network_initialization()
-
-        with tf.variable_scope('Enc1') as scope:
-                self.z_mu, self.z_logvar = self.encoder(self.X)
-                self.z_sample = self.sample_z()
-
-        with tf.variable_scope('Dec1') as scope:
-                _, self.logits = self.decoder(self.z_sample)
-                # Sampling from random z
-                self.X_samples, _ = self.decoder(self.Z)
-
-        with tf.variable_scope('App1') as scope:
-                self.pred_f = self.approximator(self.z_sample)
-        self.vae_loss_func()
-
-        self.solver = tf.train.AdamOptimizer(learning_rate=lr).minimize(self.vae_loss)
-
-    def vae_loss_func(self):
+    def _create_loss_optimizer(self):
 
         self.Div_Function(self)
 
-        # D_KL(Q(z|X) || P(z)); calculate in closed form as both dist. are Gaussian
-        self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.z_logvar) + self.z_mu**2 - 1. - self.z_logvar, 1)
+        self.latent_loss = -0.5 * tf.reduce_sum(1 + self.z_log_sigma_sq - tf.square(self.z_mean) - tf.exp(self.z_log_sigma_sq), 1)
 
-        # Approximation loss
-        self.app_loss = tf.reduce_sum(tf.pow(self.F - self.pred_f, 2)/self.descriptor.objectives)
+        self.app_cost = tf.losses.mean_squared_error(predictions=self.approximation, labels=self.obj)
 
-        # VAE loss
-        self.vae_loss = tf.reduce_mean(self.recon_loss + self.kl_loss + self.app_loss)
+        self.cost = tf.reduce_mean(self.reconstr_loss + self.latent_loss + self.app_cost)
 
-    def vae_gaussian_div(self):
-        # E[log P(X|z)]
-        self.recon_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=self.X), 1)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.cost)
 
-    def vae_mse_div(self):
-        # E[log P(X|z)]
-        self.recon_loss = tf.losses.mean_squared_error(predictions=self.logits, labels=self.X)
+    def predict_from_z(self, samples):
 
-    Divergence_Functions = {"VAE_Gaussian_Div": vae_gaussian_div, "VAE_MSE_Div": vae_mse_div}
+        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
+        return self.sess.run(self.approximation, feed_dict={self.z: np.reshape(z_mu, (samples, -1))})
 
-    def running(self, batch_type, data, mb_size, number_iterations, n_samples, print_cycle):
-        config = tf.ConfigProto(device_count={'GPU': 1})
-        sess = tf.Session(config=config)
-        sess.run(tf.global_variables_initializer())
+    def predict_from_x(self, x):
+        return self.sess.run(self.approximation, feed_dict={self.x: x})
 
-        if not os.path.exists('vae_out/'):
-            os.makedirs('vae_out/')
+    def partial_fit(self, x, obj):
+        """Train model based on mini-batch of input data.
 
-        if batch_type == "random":
-                    batch_function = next_random_batch
-        else:
-                    batch_function = next_batch
+        Return cost of mini-batch.
+        """
 
-        i = 0
-        for it in range(number_iterations):
+        _, cost1, cost2, cost3 = self.sess.run((self.optimizer, self.reconstr_loss, self.app_cost, self.latent_loss), feed_dict={self.x: x, self.obj: obj})
 
-            x_mb = batch_function(mb_size, data, i)
-            i = i+mb_size if (i+mb_size) < len(data) else 0
+        return np.sum(cost1), cost2, np.sum(cost3)
 
-            _, loss = sess.run([self.solver, self.vae_loss], feed_dict={self.X: x_mb[:, :-2], self.F: x_mb[:, -2:]})
+    def generate(self, samples, objs):
+        """ Generate data by sampling from latent space.
 
-            if it % print_cycle == 0 and False:
-                print('Iter: {}'.format(it))
-                print('V Loss: {:.4}'. format(loss))
-                print()
+        If z_mu is not None, data for this point in latent space is
+        generated. Otherwise, z_mu is drawn from prior in latent
+        space.
+        """
 
-        samples = sess.run(self.X_samples, feed_dict={self.Z:  np.random.randn(n_samples, self.descriptor.z_dim)})
+        z_mu = np.random.normal(size=(samples, self.network_architecture.z_dim))
+        # Note: This maps to mean of distribution, we could alternatively
+        # sample from Gaussian distribution
+        samples = self.sess.run([self.x_reconstr_mean, self.approximation], feed_dict={self.z: np.reshape(z_mu, (samples, -1)), self.obj: objs})
 
         return samples
 
 
-###################################################################################################
-# ############################################ VAE_E_E ############################################
-###################################################################################################
+class VAEEE(VAEE):
 
+    def __init__(self, network_architecture, objectives):
+        super().__init__(network_architecture, objectives)
 
-class VAEES:
-    def __init__(self, vae_descriptor):
-        self.descriptor = vae_descriptor
-        self.Div_Function = self.Divergence_Functions[self.descriptor.fmeasure]
-        self.Enc_network = None
-        self.Dec_network = None
-        self.App_network = None
-        self.X = None
-        self.Z = None
-        self.F = None
-        self.z_mu = None
-        self.z_logvar = None
-        self.z_sample = None
-        self.logits = None
-        self.X_samples = None
-        self.pred_f = None
-        self.solver = None
-        self.kl_loss = None
-        self.app_loss = None
-        self.vae_loss = None
-        self.recon_loss = None
+    def _generator_network(self):
+        # Generate probabilistic decoder (decoder network), which
+        # maps points in latent space onto a Bernoulli distribution in data space.
+        # The transformation is parametrized and can be learned.
+        gen_descriptor = self.network_architecture.Dec_network
+        self.gen_network = Network(gen_descriptor)
+        self.gen_network.network_initialization()
+        x_reconstr_mean = tf.nn.sigmoid(self.gen_network.network_evaluation(tf.concat((self.z, self.obj), axis=1)))
+        return x_reconstr_mean
 
-    def reset_network(self):
-        self.Enc_network.reset_network()
-        self.Dec_network.reset_network()
-        self.App_network.reset_network()
+    def _approximation_network(self):
+        # Generate probabilistic decoder (decoder network), which
+        # maps points in latent space onto a Bernoulli distribution in data space.
+        # The transformation is parametrized and can be learned.
+        app_descriptor = self.network_architecture.App_network
+        self.app_network = Network(app_descriptor)
+        self.app_network.network_initialization()
 
-    def sample_z(self):
-        # Currently sample_Z is implemented for Normal distribution. Alternative posteriors distributions
-        # could be implemented, but loss function should be modified accordingly
-        eps = tf.random_normal(shape=tf.shape(self.z_mu))
-        return self.z_mu + tf.exp(self.z_logvar / 2) * eps
+        approximation = self.app_network.network_evaluation(tf.concat((self.z, self.obj), axis=1))
+        return approximation
 
-    def encoder(self, x):
-        z_log_prob = self.Enc_network.network_evaluation(x)
-        z_prob = tf.nn.sigmoid(z_log_prob)
-        return z_prob, z_log_prob
-
-    def decoder(self, zf):
-        x_logit = self.Dec_network.network_evaluation(zf)
-        x_prob = tf.nn.sigmoid(x_logit)
-        return x_prob, x_logit
-
-    def approximator(self, f):
-        f = self.App_network.network_evaluation(f)
-        return f
-
-    def training_definition(self, lr):
-        # =============================== VAE TRAINING ====================================
-
-        self.X = tf.placeholder(tf.float32, shape=[None, self.descriptor.X_dim])
-        self.Z = tf.placeholder(tf.float32, shape=[None, self.descriptor.z_dim], name="Z")
-        self.F = tf.placeholder(tf.float32, shape=[None, self.descriptor.objectives])
-
-        self.Enc_network = Network(self.descriptor.Enc_network)
-        self.Dec_network = Network(self.descriptor.Dec_network)
-        self.App_network = Network(self.descriptor.App_network)
-
-        self.Enc_network.network_initialization()
-        self.Dec_network.network_initialization()
-        self.App_network.network_initialization()
-
-        with tf.variable_scope('Enc1') as scope:
-                self.z_mu, self.z_logvar = self.encoder(self.X)
-                self.z_sample = self.sample_z()
-        with tf.variable_scope('Dec1') as scope:
-                enhanced_input = tf.concat((self.z_sample, self.F), axis=1)
-                _, self.logits = self.decoder(enhanced_input)
-                self.X_samples, _ = self.decoder(tf.concat((self.Z, self.F), axis=1))
-        with tf.variable_scope('App1') as scope:
-                self.pred_f = self.approximator(self.z_sample)
-        self.vae_loss_func()
-
-        self.solver = tf.train.AdamOptimizer(learning_rate=lr).minimize(self.vae_loss)
-
-    def vae_loss_func(self):
-
-        self.Div_Function(self)
-
-        # D_KL(Q(z|X) || P(z)); calculate in closed form as both dist. are Gaussian
-        self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.z_logvar) + self.z_mu**2 - 1. - self.z_logvar, 1)
-
-        # Approximation loss
-        self.app_loss = tf.reduce_sum(tf.pow(self.F - self.pred_f, 2)/self.descriptor.objectives)
-
-        # VAE loss
-        self.vae_loss = tf.reduce_mean(self.recon_loss + self.kl_loss + self.app_loss)
-
-    def vae_gaussian_div(self):
-        # E[log P(X|z)]
-        self.recon_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=self.X), 1)
-
-    def vae_mse_div(self):
-        # E[log P(X|z)]
-        self.recon_loss = tf.losses.mean_squared_error(predictions=self.logits, labels=self.X)
-
-    Divergence_Functions = {"VAE_Gaussian_Div": vae_gaussian_div, "VAE_MSE_Div": vae_mse_div}
-
-    def running(self, batch_type, data, mb_size, number_iterations, n_samples, print_cycle):
-        config = tf.ConfigProto(device_count={'GPU': 1})
-        sess = tf.Session(config=config)
-        sess.run(tf.global_variables_initializer())
-
-        if not os.path.exists('vae_out/'):
-            os.makedirs('vae_out/')
-
-        if batch_type == "random":
-                    batch_function = next_random_batch
-        else:
-                    batch_function = next_batch
-
-        i = 0
-
-        for it in range(number_iterations):
-
-            x_mb = batch_function(mb_size, data, i)
-            i = i+mb_size if (i+mb_size) < len(data) else 0
-
-            _, loss = sess.run([self.solver, self.vae_loss], feed_dict={self.X: x_mb[:, :-2], self.F: x_mb[:, -2:]})
-
-            if it % print_cycle == 0:
-                print('Iter: {}'.format(it))
-                print('V Loss: {:.4}'. format(loss))
-                print()
-
-        samples = sess.run(self.X_samples, feed_dict={self.Z:  np.random.randn(n_samples, self.descriptor.z_dim), self.F: data[np.random.choice(data.shape[0], n_samples, replace=False), -2:]})
-
-        return samples
